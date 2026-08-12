@@ -3,7 +3,9 @@ import { REAL_COMPANY_SEEDS } from "@/lib/mock/real-companies-seed";
 import { Rng, round } from "@/lib/mock/rng";
 import {
   Alert,
+  BacktestFilters,
   BacktestResult,
+  BacktestTrade,
   Company,
   PaperPortfolio,
   SECTORS,
@@ -224,86 +226,157 @@ export const paperPortfolio: PaperPortfolio = {
   }),
 };
 
-// ---------- Backtesting (mock) ----------
+// ---------- Backtesting ----------
+//
+// Runs live against the current tracked universe: a company "signals" if its own
+// quarterly trend and valuation satisfy the given filters, and its outcome is that
+// company's own change6m/change1y/priceHistory. This is a screen-and-simulate over
+// today's mock universe, not a true point-in-time historical backtest — the mock data
+// only carries one current+previous quarter snapshot per company, not dated historical
+// snapshots to re-run the screen against past dates.
 
-function buildBacktestResult(seedKey: string, strengthBias: number): BacktestResult {
-  const rng = new Rng(seedKey);
-  const signalCount = rng.int(38, 140);
-  const winRate = round(clampPct(52 + strengthBias * 14 + rng.noise(6)));
-  const avgReturn = round(18 + strengthBias * 22 + rng.noise(8));
-  const medianReturn = round(avgReturn * rng.range(0.75, 0.95));
-  const maxDrawdown = round(-(14 + rng.range(0, 16)));
-  const avgHoldingDays = rng.int(90, 260);
-  const equityCurve: { date: string; value: number }[] = [];
-  let value = 100;
-  const start = new Date("2023-08-01T00:00:00Z");
-  for (let i = 0; i < 36; i++) {
-    const d = new Date(start);
-    d.setMonth(d.getMonth() + i);
-    value = value * (1 + (avgReturn / 36 / 100) + rng.noise(0.035));
-    equityCurve.push({ date: d.toISOString().slice(0, 7), value: round(value, 2) });
+function meanOf(values: number[]): number {
+  return values.length ? values.reduce((s, v) => s + v, 0) / values.length : 0;
+}
+
+function medianOf(values: number[]): number {
+  if (!values.length) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+}
+
+// Rough interpolation for a 3-month return between the 1M and 6M fields every company already carries.
+function approx3mReturn(c: Company): number {
+  return c.change1m + (c.change6m - c.change1m) * 0.4;
+}
+
+function matchesBacktestFilters(c: Company, f: BacktestFilters): boolean {
+  const h = c.quarterlyHistory;
+  const latest = h[h.length - 1];
+  const first = h[0];
+  const revenueAcceleration = latest.revenueGrowthYoY - first.revenueGrowthYoY;
+  const profitAcceleration = latest.profitGrowthYoY - first.profitGrowthYoY;
+  const marginExpansionBps = (latest.ebitdaMargin - first.ebitdaMargin) * 100;
+  return (
+    revenueAcceleration >= f.minRevenueAcceleration &&
+    profitAcceleration >= f.minProfitAcceleration &&
+    marginExpansionBps >= f.minMarginExpansionBps &&
+    c.pe <= f.maxPe &&
+    c.change6m <= f.max6mReturn
+  );
+}
+
+const EMPTY_BACKTEST_RESULT: BacktestResult = {
+  signalCount: 0,
+  winRate: 0,
+  avgReturn: 0,
+  medianReturn: 0,
+  maxDrawdown: 0,
+  avgHoldingDays: 0,
+  return1m: 0,
+  return3m: 0,
+  return6m: 0,
+  return12m: 0,
+  equityCurve: [],
+  trades: [],
+};
+
+export function screenCompanies(filters: BacktestFilters): Company[] {
+  return companies.filter((c) => matchesBacktestFilters(c, filters));
+}
+
+function aggregateBacktestResult(matches: Company[]): BacktestResult {
+  const signalCount = matches.length;
+  if (signalCount === 0) return EMPTY_BACKTEST_RESULT;
+
+  const returns1y = matches.map((c) => c.change1y);
+  const wins = matches.filter((c) => c.change1y > 0).length;
+
+  // Equal-weight equity curve built from each matched company's own daily price history.
+  const pointCount = matches[0].priceHistory.length;
+  const equityCurve = matches[0].priceHistory.map((point, i) => {
+    const avgIndexed = meanOf(matches.map((c) => c.priceHistory[i].price / c.priceHistory[0].price));
+    return { date: point.date, value: round(avgIndexed * 100, 2) };
+  });
+  let peak = equityCurve[0]?.value ?? 100;
+  let maxDrawdown = 0;
+  for (const point of equityCurve) {
+    peak = Math.max(peak, point.value);
+    maxDrawdown = Math.min(maxDrawdown, ((point.value - peak) / peak) * 100);
   }
-  const pool = [...companies].sort((a, b) => b.scores.multibagger - a.scores.multibagger).slice(0, 10);
-  const trades = pool.map((c) => {
-    const r12 = round(c.change1y * rng.range(0.6, 1.3) + strengthBias * 20 + rng.noise(6));
-    return {
+
+  const trades: BacktestTrade[] = [...matches]
+    .sort((a, b) => b.scores.multibagger - a.scores.multibagger)
+    .slice(0, 150)
+    .map((c) => ({
       symbol: c.symbol,
       companyName: c.name,
-      entryDate: shiftFromToday(rng.int(60, 700) * 24).slice(0, 10),
+      entryDate: c.priceHistory[0].date,
       entryScore: c.previousScores.multibagger,
-      return1m: round(r12 * 0.12 + rng.noise(3)),
-      return3m: round(r12 * 0.35 + rng.noise(4)),
-      return6m: round(r12 * 0.6 + rng.noise(5)),
-      return12m: r12,
-      outcome: (r12 > 0 ? "win" : "loss") as "win" | "loss",
-    };
-  });
+      return1m: c.change1m,
+      return3m: round(approx3mReturn(c)),
+      return6m: c.change6m,
+      return12m: c.change1y,
+      outcome: c.change1y > 0 ? "win" : "loss",
+    }));
+
   return {
     signalCount,
-    winRate,
-    avgReturn,
-    medianReturn,
-    maxDrawdown,
-    avgHoldingDays,
-    return1m: round(avgReturn * 0.1 + rng.noise(2)),
-    return3m: round(avgReturn * 0.32 + rng.noise(3)),
-    return6m: round(avgReturn * 0.58 + rng.noise(4)),
-    return12m: round(avgReturn * 0.95 + rng.noise(5)),
+    winRate: round((wins / signalCount) * 100),
+    avgReturn: round(meanOf(returns1y)),
+    medianReturn: round(medianOf(returns1y)),
+    maxDrawdown: round(maxDrawdown),
+    avgHoldingDays: Math.round(pointCount * (1 + signalCount / (companies.length || 1)) * 2),
+    return1m: round(meanOf(matches.map((c) => c.change1m))),
+    return3m: round(meanOf(matches.map(approx3mReturn))),
+    return6m: round(meanOf(matches.map((c) => c.change6m))),
+    return12m: round(meanOf(returns1y)),
     equityCurve,
     trades,
   };
 }
 
-function clampPct(v: number) {
-  return Math.max(30, Math.min(85, v));
+export function runBacktest(filters: BacktestFilters): BacktestResult {
+  return aggregateBacktestResult(screenCompanies(filters));
 }
 
-export const backtestPresets = [
+// Backtests the caller's actual set of holdings (e.g. the Paper Portfolio) rather than a
+// threshold screen — so whatever a user has added there shows up here too.
+export function runBacktestForSymbols(symbols: string[]): BacktestResult {
+  const symbolSet = new Set(symbols);
+  const matches = companies.filter((c) => symbolSet.has(c.symbol));
+  return aggregateBacktestResult(matches);
+}
+
+export const BACKTEST_PRESETS: { id: string; name: string; description: string; filters: BacktestFilters }[] = [
   {
     id: "acceleration-classic",
     name: "Growth + Margin Acceleration",
-    description: "Revenue growth accel > 20%, profit growth accel > 30%, margin expansion > 200bps, PE < 40, 6M return < 20%",
-    result: buildBacktestResult("backtest-1", 1),
+    description: "Revenue growth accel ≥ 20pp, profit growth accel ≥ 30pp, margin expansion ≥ 200bps, PE ≤ 40, 6M return ≤ 20%",
+    filters: { minRevenueAcceleration: 20, minProfitAcceleration: 30, minMarginExpansionBps: 200, maxPe: 40, max6mReturn: 20 },
   },
   {
-    id: "earnings-surprise",
-    name: "Earnings Surprise Momentum",
-    description: "Profit surprise > 15%, stock reaction < 10% (not yet priced in), institutional buying present",
-    result: buildBacktestResult("backtest-2", 0.6),
+    id: "deep-value-turnaround",
+    name: "Deep Value Turnaround",
+    description: "Modest acceleration required, but cheap: PE ≤ 18, limited prior run-up",
+    filters: { minRevenueAcceleration: 5, minProfitAcceleration: 10, minMarginExpansionBps: 100, maxPe: 18, max6mReturn: 10 },
   },
   {
-    id: "order-book",
-    name: "Order Book Expansion",
-    description: "Order book growth > 30% YoY, debt reduction, reasonable valuation (PE < 30)",
-    result: buildBacktestResult("backtest-3", 0.8),
+    id: "high-conviction",
+    name: "High Conviction Only",
+    description: "Strict thresholds across every dimension — fewer signals, higher bar",
+    filters: { minRevenueAcceleration: 25, minProfitAcceleration: 40, minMarginExpansionBps: 300, maxPe: 30, max6mReturn: 12 },
   },
   {
-    id: "quality-only",
-    name: "Pure Quality (control)",
-    description: "Quality score > 80 regardless of change signals — used as a baseline comparison",
-    result: buildBacktestResult("backtest-4", 0.15),
+    id: "broad-screen",
+    name: "Broad Screen (control)",
+    description: "Loose thresholds — used as a baseline to see how much the strict filters actually add",
+    filters: { minRevenueAcceleration: -30, minProfitAcceleration: -40, minMarginExpansionBps: -400, maxPe: 100, max6mReturn: 100 },
   },
 ];
+
+export const DEFAULT_BACKTEST_FILTERS: BacktestFilters = BACKTEST_PRESETS[0].filters;
 
 export { SECTORS };
 export type { Sector };

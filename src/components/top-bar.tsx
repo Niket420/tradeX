@@ -11,7 +11,15 @@ import { ScoreBadge } from "@/components/score-badge";
 
 export function TopBar() {
   const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
   const router = useRouter();
+
+  const q = query.trim().toLowerCase();
+  const results = (
+    q
+      ? companies.filter((c) => c.name.toLowerCase().includes(q) || c.symbol.toLowerCase().includes(q) || c.sector.toLowerCase().includes(q))
+      : companies
+  ).slice(0, 50);
 
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
@@ -51,15 +59,22 @@ export function TopBar() {
         </Button>
       </div>
 
-      <CommandDialog open={open} onOpenChange={setOpen}>
-        <CommandInput placeholder="Jump to a company..." />
+      <CommandDialog
+        open={open}
+        onOpenChange={(v) => {
+          setOpen(v);
+          if (!v) setQuery("");
+        }}
+        shouldFilter={false}
+      >
+        <CommandInput placeholder="Jump to a company..." value={query} onValueChange={setQuery} />
         <CommandList>
           <CommandEmpty>No results found.</CommandEmpty>
           <CommandGroup heading="Companies">
-            {companies.slice(0, 50).map((c) => (
+            {results.map((c) => (
               <CommandItem
                 key={c.symbol}
-                value={`${c.name} ${c.symbol} ${c.sector}`}
+                value={c.symbol}
                 onSelect={() => {
                   setOpen(false);
                   router.push(`/company/${c.symbol}`);
