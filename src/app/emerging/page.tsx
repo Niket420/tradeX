@@ -1,11 +1,20 @@
+"use client";
+
+import { useState } from "react";
 import Link from "next/link";
 import { ScoreBadge } from "@/components/score-badge";
 import { Card } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 import { formatPct, changeColorClass } from "@/lib/format";
 import { emergingOpportunities } from "@/lib/mock-data";
 import { cn } from "@/lib/utils";
 
+const PAGE_SIZE = 50;
+
 export default function EmergingOpportunitiesPage() {
+  const [visible, setVisible] = useState(PAGE_SIZE);
+  const shown = emergingOpportunities.slice(0, visible);
+
   return (
     <div className="flex flex-col gap-4">
       <div>
@@ -13,8 +22,12 @@ export default function EmergingOpportunitiesPage() {
         <p className="text-sm text-muted-foreground">Companies whose fundamentals are improving faster than the market has recognized.</p>
       </div>
 
+      <p className="text-xs text-muted-foreground">
+        Showing {shown.length.toLocaleString("en-IN")} of {emergingOpportunities.length.toLocaleString("en-IN")} companies with a rising score.
+      </p>
+
       <div className="flex flex-col gap-3">
-        {emergingOpportunities.map(({ company: c, scoreChange }, idx) => {
+        {shown.map(({ company: c, scoreChange }, idx) => {
           const latest = c.quarterlyHistory[c.quarterlyHistory.length - 1];
           const first = c.quarterlyHistory[0];
           const reasons = c.signals.filter((s) =>
@@ -72,6 +85,12 @@ export default function EmergingOpportunitiesPage() {
           );
         })}
       </div>
+
+      {visible < emergingOpportunities.length ? (
+        <Button variant="outline" size="sm" className="mx-auto" onClick={() => setVisible((v) => v + PAGE_SIZE)}>
+          Load more
+        </Button>
+      ) : null}
     </div>
   );
 }

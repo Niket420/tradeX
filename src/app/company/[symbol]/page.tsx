@@ -7,12 +7,8 @@ import { FinancialChart } from "@/components/financial-chart";
 import { ScoreBadge } from "@/components/score-badge";
 import { SignalBadge } from "@/components/signal-badge";
 import { formatCr, formatPct, formatDate, changeColorClass } from "@/lib/format";
-import { companies, getCompany } from "@/lib/mock-data";
+import { getCompany } from "@/lib/mock-data";
 import { cn } from "@/lib/utils";
-
-export function generateStaticParams() {
-  return companies.map((c) => ({ symbol: c.symbol }));
-}
 
 export default async function CompanyDetailPage({ params }: { params: Promise<{ symbol: string }> }) {
   const { symbol } = await params;

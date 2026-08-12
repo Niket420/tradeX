@@ -22,8 +22,8 @@ function UniverseContent() {
       <div>
         <h1 className="text-lg font-semibold">Market Universe</h1>
         <p className="text-sm text-muted-foreground">
-          The complete tracked universe — {TOTAL_COMPANIES_TRACKED.toLocaleString("en-IN")} companies, {companies.length} shown in this mock dataset.
-          Nothing is hidden for having a low score.
+          The complete tracked universe — all {TOTAL_COMPANIES_TRACKED.toLocaleString("en-IN")} companies listed on NSE and/or BSE. Financials and
+          scores are still mock/randomized pending a live data connection. Nothing is hidden for having a low score.
         </p>
       </div>
       <FilterBar filters={filters} onChange={setFilters} />

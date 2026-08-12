@@ -14,7 +14,7 @@ import {
   colMultibaggerScore,
 } from "@/components/company-columns";
 import { Button } from "@/components/ui/button";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { CompanyCombobox } from "@/components/company-combobox";
 import { companies, defaultWatchlist } from "@/lib/mock-data";
 import { Company } from "@/lib/types";
 
@@ -46,18 +46,7 @@ export default function WatchlistPage() {
           <p className="text-sm text-muted-foreground">{watchlistCompanies.length} companies you&apos;re tracking closely.</p>
         </div>
         <div className="flex items-center gap-2">
-          <Select value={toAdd} onValueChange={(v) => setToAdd(v ?? "")}>
-            <SelectTrigger className="h-8 w-56 text-xs">
-              <SelectValue placeholder="Add a company..." />
-            </SelectTrigger>
-            <SelectContent>
-              {available.map((c) => (
-                <SelectItem key={c.symbol} value={c.symbol}>
-                  {c.name} ({c.symbol})
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <CompanyCombobox companies={available} value={toAdd} onChange={setToAdd} placeholder="Add a company..." />
           <Button
             size="sm"
             className="h-8"

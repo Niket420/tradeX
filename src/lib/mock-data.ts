@@ -1,5 +1,5 @@
 import { generateCompany } from "@/lib/mock/generate-company";
-import { SEED_COMPANIES } from "@/lib/mock/seed-companies";
+import { REAL_COMPANY_SEEDS } from "@/lib/mock/real-companies-seed";
 import { Rng, round } from "@/lib/mock/rng";
 import {
   Alert,
@@ -12,16 +12,29 @@ import {
 } from "@/lib/types";
 
 export const TODAY = "2026-08-12";
-export const TOTAL_COMPANIES_TRACKED = 3127;
 
-export const companies: Company[] = SEED_COMPANIES.map((seed, i) => generateCompany(seed, i));
+export const companies: Company[] = REAL_COMPANY_SEEDS.map((seed, i) => generateCompany(seed, i));
+
+// Real count of merged NSE+BSE listings — see scripts/build-universe.mjs.
+export const TOTAL_COMPANIES_TRACKED = companies.length;
 
 // Assign peers within the same sector now that all companies exist.
+// Grouped once up front — filtering the full array per company is O(n^2) and not viable at 5k+ rows.
+const companiesBySector = new Map<string, Company[]>();
 for (const company of companies) {
-  company.peers = companies
-    .filter((c) => c.sector === company.sector && c.symbol !== company.symbol)
-    .map((c) => c.symbol)
-    .slice(0, 4);
+  const list = companiesBySector.get(company.sector);
+  if (list) list.push(company);
+  else companiesBySector.set(company.sector, [company]);
+}
+for (const company of companies) {
+  const sectorPeers = companiesBySector.get(company.sector) ?? [];
+  const peers: string[] = [];
+  for (const c of sectorPeers) {
+    if (c.symbol === company.symbol) continue;
+    peers.push(c.symbol);
+    if (peers.length === 4) break;
+  }
+  company.peers = peers;
 }
 
 const companyBySymbol = new Map(companies.map((c) => [c.symbol, c]));
@@ -190,22 +203,24 @@ export const marketStatus = {
 
 // ---------- Watchlist (default) ----------
 
-export const defaultWatchlist = ["COREWV", "RAKASP", "NEXNSC", "SURYGE", "SOLLIF", "NUTRLF", "BRDGIP", "SILKRA"];
+export const defaultWatchlist = multibaggerRadar.slice(0, 8).map((c) => c.symbol);
 
 // ---------- Paper portfolio (default mock state) ----------
+
+const PAPER_HOLDING_TEMPLATES = [
+  { entryDate: "2026-04-14", quantity: 120, signal: "Multibagger Radar entry", reason: "Revenue + profit acceleration with order book growth" },
+  { entryDate: "2026-03-02", quantity: 85, signal: "Margin expansion", reason: "EBITDA margin expanded 400+ bps over 3 quarters" },
+  { entryDate: "2026-05-21", quantity: 200, signal: "Order book radar", reason: "Order book up 60%+ YoY, institutional accumulation" },
+  { entryDate: "2026-06-09", quantity: 45, signal: "Earnings acceleration", reason: "Three consecutive quarters of profit acceleration" },
+];
 
 export const paperPortfolio: PaperPortfolio = {
   capital: 1000000,
   cash: 214500,
-  holdings: [
-    { symbol: "COREWV", companyName: "Corewave Digital", entryDate: "2026-04-14", entryPrice: 0, currentPrice: 0, quantity: 120, signal: "Multibagger Radar entry", score: 0, reason: "Revenue + profit acceleration with order book growth" },
-    { symbol: "NEXNSC", companyName: "Nexon Specialty Chem", entryDate: "2026-03-02", entryPrice: 0, currentPrice: 0, quantity: 85, signal: "Margin expansion", score: 0, reason: "EBITDA margin expanded 400+ bps over 3 quarters" },
-    { symbol: "SURYGE", companyName: "Suryodaya Green Energy", entryDate: "2026-05-21", entryPrice: 0, currentPrice: 0, quantity: 200, signal: "Order book radar", score: 0, reason: "Order book up 60%+ YoY, institutional accumulation" },
-    { symbol: "RAKASP", companyName: "Rakshak Aerospace", entryDate: "2026-06-09", entryPrice: 0, currentPrice: 0, quantity: 45, signal: "Earnings acceleration", score: 0, reason: "Three consecutive quarters of profit acceleration" },
-  ].map((h) => {
-    const c = getCompany(h.symbol)!;
+  holdings: multibaggerRadar.slice(8, 12).map((c, i) => {
+    const template = PAPER_HOLDING_TEMPLATES[i];
     const entryPrice = round(c.price / (1 + c.change6m / 100), 2);
-    return { ...h, entryPrice, currentPrice: c.price, score: c.scores.multibagger };
+    return { symbol: c.symbol, companyName: c.name, entryPrice, currentPrice: c.price, score: c.scores.multibagger, ...template };
   }),
 };
 

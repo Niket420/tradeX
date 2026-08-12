@@ -1,15 +1,22 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
 import { ChevronDown } from "lucide-react";
 import { Card } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 import { ScoreBadge } from "@/components/score-badge";
 import { Sparkline } from "@/components/sparkline";
 import { formatPct, changeColorClass } from "@/lib/format";
 import { multibaggerRadar } from "@/lib/mock-data";
 import { cn } from "@/lib/utils";
 
+const PAGE_SIZE = 50;
+
 export default function MultibaggerRadarPage() {
+  const [visible, setVisible] = useState(PAGE_SIZE);
+  const shown = multibaggerRadar.slice(0, visible);
+
   return (
     <div className="flex flex-col gap-4">
       <div>
@@ -20,8 +27,13 @@ export default function MultibaggerRadarPage() {
         </p>
       </div>
 
+      <p className="text-xs text-muted-foreground">
+        Ranked by Multibagger score across the full tracked universe. Showing {shown.length.toLocaleString("en-IN")} of{" "}
+        {multibaggerRadar.length.toLocaleString("en-IN")}.
+      </p>
+
       <div className="flex flex-col gap-2.5">
-        {multibaggerRadar.map((c, idx) => {
+        {shown.map((c, idx) => {
           const h = c.quarterlyHistory;
           const revSeries = h.map((q) => q.revenueGrowthYoY);
           const profitSeries = h.map((q) => q.profitGrowthYoY);
@@ -70,6 +82,12 @@ export default function MultibaggerRadarPage() {
           );
         })}
       </div>
+
+      {visible < multibaggerRadar.length ? (
+        <Button variant="outline" size="sm" className="mx-auto" onClick={() => setVisible((v) => v + PAGE_SIZE)}>
+          Load more
+        </Button>
+      ) : null}
     </div>
   );
 }
