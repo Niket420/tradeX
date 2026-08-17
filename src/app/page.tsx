@@ -7,8 +7,46 @@ import { SignalBadge } from "@/components/signal-badge";
 import { formatPct, changeColorClass } from "@/lib/format";
 import { dashboardStats, dashboardSparklines, emergingSignals, biggestFundamentalChanges } from "@/lib/mock-data";
 import { cn } from "@/lib/utils";
+import { prisma } from "@/lib/db/prisma";
 
-export default function DashboardPage() {
+// Real data from Postgres, layered onto the otherwise-mock dashboard: only
+// this one stat is backed by the actual ingested company universe so far.
+// Falls back to the mock figure if the database isn't reachable (e.g. local
+// Postgres not running) rather than crashing the whole dashboard.
+async function getRealCompanyCount(): Promise<number | null> {
+  try {
+    return await prisma.company.count();
+  } catch {
+    return null;
+  }
+}
+
+// Companies with at least one real ingested FinancialStatement, PriceHistory,
+// or Announcement (NSE or BSE) — link out to the dedicated /data/[isin]
+// pages rather than the mock /company/[symbol] pages, since mock companies
+// have no real ISIN to bridge to.
+async function getCompaniesWithRealData() {
+  try {
+    const where = { OR: [{ financialStatements: { some: {} } }, { priceHistory: { some: {} } }, { announcements: { some: {} } }] };
+    const [companies, total] = await Promise.all([
+      prisma.company.findMany({
+        where,
+        select: { isin: true, companyName: true, nseSymbol: true, bseCode: true },
+        orderBy: { companyName: "asc" },
+        take: 12,
+      }),
+      prisma.company.count({ where }),
+    ]);
+    return { companies, total };
+  } catch {
+    return { companies: [], total: 0 };
+  }
+}
+
+export default async function DashboardPage() {
+  const realCompanyCount = await getRealCompanyCount();
+  const { companies: companiesWithRealData, total: realDataCompanyCount } = await getCompaniesWithRealData();
+
   return (
     <div className="flex flex-col gap-6">
       <div>
@@ -19,9 +57,10 @@ export default function DashboardPage() {
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-4">
         <MetricCard
           label="Total companies tracked"
-          value={dashboardStats.totalCompaniesTracked.toLocaleString("en-IN")}
+          value={(realCompanyCount ?? dashboardStats.totalCompaniesTracked).toLocaleString("en-IN")}
           icon={Building2}
           spark={dashboardSparklines.totalCompaniesTracked}
+          hint={realCompanyCount === null ? "Mock data — Postgres not reachable" : "Live from PostgreSQL"}
         />
         <MetricCard
           label="Positive earnings acceleration"
@@ -66,6 +105,39 @@ export default function DashboardPage() {
           spark={dashboardSparklines.newMultibaggerEntrants}
         />
       </div>
+
+      {companiesWithRealData.length > 0 && (
+        <section className="flex flex-col gap-3">
+          <div className="flex items-center justify-between">
+            <div>
+              <div className="flex items-center gap-2">
+                <h2 className="text-sm font-semibold">Real Data (NSE + BSE)</h2>
+                <span className="rounded-md border border-emerald-400/25 bg-emerald-400/10 px-2 py-0.5 text-[11px] text-emerald-400">Live from Postgres</span>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {realDataCompanyCount.toLocaleString("en-IN")} companies with real financials/prices/announcements ingested so far — separate from the mock research pages below.
+              </p>
+            </div>
+            <Link href="/data" className="flex shrink-0 items-center gap-1 text-xs text-primary hover:underline">
+              View all prices <ArrowRight className="h-3 w-3" />
+            </Link>
+          </div>
+          <div className="grid grid-cols-1 gap-2.5 md:grid-cols-2 xl:grid-cols-4">
+            {companiesWithRealData.map((c) => (
+              <Link
+                key={c.isin}
+                href={`/data/${c.isin}`}
+                className="flex flex-col gap-1 rounded-lg border border-border bg-card p-3 transition-colors hover:border-primary/40"
+              >
+                <span className="text-sm font-medium">{c.companyName}</span>
+                <span className="font-mono text-[11px] text-muted-foreground">
+                  {c.isin} {c.nseSymbol ? `· NSE: ${c.nseSymbol}` : c.bseCode ? `· BSE: ${c.bseCode}` : ""}
+                </span>
+              </Link>
+            ))}
+          </div>
+        </section>
+      )}
 
       <section className="flex flex-col gap-3">
         <div className="flex items-center justify-between">

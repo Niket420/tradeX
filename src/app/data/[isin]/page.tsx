@@ -1,82 +1,86 @@
 import { notFound } from "next/navigation";
 import { Card } from "@/components/ui/card";
-import { RealCompanyHeader } from "@/components/real-company-header";
-import { getRealCompanyBySymbol } from "@/lib/real-company-lookup";
+import { prisma } from "@/lib/db/prisma";
 import { computeFinancialGrowth, computePriceReturns } from "@/lib/features";
 import { formatCr, formatPct } from "@/lib/format";
-import { getCompany } from "@/lib/mock-data";
 
 function fmtDate(d: Date): string {
   return d.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
 }
 
-function fmtPctOrDash(value: number | null, withSign = true): string {
-  return value === null ? "—" : formatPct(value, withSign);
+function fmtOrNoData(value: number | string | null | undefined, formatter?: (v: number) => string): string {
+  if (value === null || value === undefined) return "No data available yet";
+  if (typeof value === "number" && formatter) return formatter(value);
+  return String(value);
 }
 
-/**
- * Real-data company page. Looks up the symbol against the real (Postgres)
- * company universe first — ~99.4% of the app's symbols resolve here. Score
- * Breakdown / Multibagger Score / AI Research Summary are intentionally
- * omitted: there is no scoring engine, and those numbers would otherwise
- * have to be fabricated.
- */
-export default async function CompanyDetailPage({ params }: { params: Promise<{ symbol: string }> }) {
-  const { symbol } = await params;
-  const company = await getRealCompanyBySymbol(symbol);
+/** Real-data-only company page — separate from the mock /company/[symbol] pages by design (see AGENTS.md ingestion notes: don't redesign existing UI, only add real data where it genuinely exists). Every value here comes straight from Postgres; nothing is fabricated. */
+export default async function RealCompanyDataPage({ params }: { params: Promise<{ isin: string }> }) {
+  const { isin } = await params;
+  const isinUpper = isin.toUpperCase();
 
-  if (!company) {
-    const mock = getCompany(symbol);
-    if (!mock) notFound();
-    return (
-      <div className="flex flex-col gap-4">
-        <div>
-          <h1 className="text-lg font-semibold">{mock.name}</h1>
-          <p className="font-mono text-xs text-muted-foreground">{mock.symbol}</p>
-        </div>
-        <Card className="p-6 text-center text-sm text-muted-foreground">No real data tracked for this company yet.</Card>
-      </div>
-    );
-  }
+  const company = await prisma.company.findUnique({
+    where: { isin: isinUpper },
+    include: {
+      financialStatements: { orderBy: [{ fiscalYear: "desc" }, { fiscalQuarter: "desc" }] },
+      priceHistory: { orderBy: { date: "desc" }, take: 30 },
+      announcements: { orderBy: { announcementDate: "desc" }, take: 15 },
+      newsArticles: { orderBy: { publishedAt: "desc" }, take: 15 },
+    },
+  });
+
+  if (!company) notFound();
 
   const growth = computeFinancialGrowth(company.financialStatements);
   const returns = computePriceReturns(company.priceHistory);
-  const symbolLabel = company.nseSymbol ?? company.bseSymbol;
+
+  const sources = new Set([...company.financialStatements.map((f) => f.source), ...company.priceHistory.map((p) => p.source), ...company.announcements.map((a) => a.source)]);
+  const sourceLabel = sources.size > 0 ? [...sources].map((s) => s.toUpperCase()).sort().join(" + ") : "no data yet";
 
   return (
     <div className="flex flex-col gap-6">
-      <RealCompanyHeader companyName={company.companyName} symbol={symbolLabel} isin={company.isin} sector={company.sector} industry={company.industry} returns={returns} />
+      <div>
+        <div className="flex items-center gap-2">
+          <h1 className="text-lg font-semibold">{company.companyName}</h1>
+          <span className="rounded-md border border-emerald-400/25 bg-emerald-400/10 px-2 py-0.5 text-[11px] text-emerald-400">Real data ({sourceLabel})</span>
+        </div>
+        <p className="text-sm text-muted-foreground">
+          {company.isin} {company.nseSymbol ? `· NSE: ${company.nseSymbol}` : ""} {company.bseCode ? `· BSE: ${company.bseCode}` : ""}
+        </p>
+      </div>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <Card className="p-4">
-          <h2 className="text-sm font-semibold">Financial Growth</h2>
+          <h2 className="text-sm font-semibold">Financial Growth (computed from stored results)</h2>
           {growth ? (
-            <div className="mt-2 grid grid-cols-2 gap-3 text-xs sm:grid-cols-3">
-              <Stat label="Revenue QoQ" value={fmtPctOrDash(growth.revenueQoQGrowthPct)} />
-              <Stat label="Revenue YoY" value={fmtPctOrDash(growth.revenueYoYGrowthPct)} />
-              <Stat label="PAT QoQ" value={fmtPctOrDash(growth.patQoQGrowthPct)} />
-              <Stat label="PAT YoY" value={fmtPctOrDash(growth.patYoYGrowthPct)} />
-              <Stat label="EPS YoY" value={fmtPctOrDash(growth.epsYoYGrowthPct)} />
-              <Stat label="EBITDA margin" value={fmtPctOrDash(growth.ebitdaMarginPct, false)} />
+            <div className="mt-2 grid grid-cols-2 gap-3 text-xs">
+              <Stat label="Revenue QoQ" value={fmtOrNoData(growth.revenueQoQGrowthPct, (v) => formatPct(v))} />
+              <Stat label="Revenue YoY" value={fmtOrNoData(growth.revenueYoYGrowthPct, (v) => formatPct(v))} />
+              <Stat label="PAT QoQ" value={fmtOrNoData(growth.patQoQGrowthPct, (v) => formatPct(v))} />
+              <Stat label="PAT YoY" value={fmtOrNoData(growth.patYoYGrowthPct, (v) => formatPct(v))} />
+              <Stat label="EPS YoY" value={fmtOrNoData(growth.epsYoYGrowthPct, (v) => formatPct(v))} />
+              <Stat label="EBITDA margin" value={fmtOrNoData(growth.ebitdaMarginPct, (v) => formatPct(v, false))} />
             </div>
           ) : (
-            <p className="mt-2 text-xs text-muted-foreground">No financial data available yet.</p>
+            <p className="mt-2 text-xs text-muted-foreground">No data available yet</p>
           )}
         </Card>
 
         <Card className="p-4">
-          <h2 className="text-sm font-semibold">Price Returns</h2>
+          <h2 className="text-sm font-semibold">Price Returns (computed from stored history)</h2>
           {returns ? (
-            <div className="mt-2 grid grid-cols-2 gap-3 text-xs sm:grid-cols-3">
-              <Stat label="1D" value={fmtPctOrDash(returns.return1D)} />
-              <Stat label="1W" value={fmtPctOrDash(returns.return1W)} />
-              <Stat label="1M" value={fmtPctOrDash(returns.return1M)} />
-              <Stat label="3M" value={fmtPctOrDash(returns.return3M)} />
-              <Stat label="6M" value={fmtPctOrDash(returns.return6M)} />
-              <Stat label="From 52W high" value={fmtPctOrDash(returns.distanceFrom52WeekHighPct)} />
+            <div className="mt-2 grid grid-cols-3 gap-3 text-xs">
+              <Stat label="1D" value={fmtOrNoData(returns.return1D, (v) => formatPct(v))} />
+              <Stat label="1W" value={fmtOrNoData(returns.return1W, (v) => formatPct(v))} />
+              <Stat label="1M" value={fmtOrNoData(returns.return1M, (v) => formatPct(v))} />
+              <Stat label="3M" value={fmtOrNoData(returns.return3M, (v) => formatPct(v))} />
+              <Stat label="6M" value={fmtOrNoData(returns.return6M, (v) => formatPct(v))} />
+              <Stat label="1Y" value={fmtOrNoData(returns.return1Y, (v) => formatPct(v))} />
+              <Stat label="From 52W high" value={fmtOrNoData(returns.distanceFrom52WeekHighPct, (v) => formatPct(v))} />
+              <Stat label="Latest close" value={fmtOrNoData(returns.latestClose, (v) => `₹${v.toLocaleString("en-IN")}`)} />
             </div>
           ) : (
-            <p className="mt-2 text-xs text-muted-foreground">No price data available yet.</p>
+            <p className="mt-2 text-xs text-muted-foreground">No data available yet</p>
           )}
         </Card>
       </div>
@@ -84,7 +88,7 @@ export default async function CompanyDetailPage({ params }: { params: Promise<{ 
       <Card className="p-4">
         <h2 className="text-sm font-semibold">Financial Statements</h2>
         {company.financialStatements.length === 0 ? (
-          <p className="mt-2 text-xs text-muted-foreground">No data available yet.</p>
+          <p className="mt-2 text-xs text-muted-foreground">No data available yet</p>
         ) : (
           <div className="mt-2 overflow-x-auto">
             <table className="w-full text-xs">
@@ -95,6 +99,7 @@ export default async function CompanyDetailPage({ params }: { params: Promise<{ 
                   <th className="py-1.5 pr-3 font-medium">PAT</th>
                   <th className="py-1.5 pr-3 font-medium">EPS</th>
                   <th className="py-1.5 pr-3 font-medium">Debt/Equity</th>
+                  <th className="py-1.5 pr-3 font-medium">Source</th>
                 </tr>
               </thead>
               <tbody>
@@ -105,6 +110,7 @@ export default async function CompanyDetailPage({ params }: { params: Promise<{ 
                     <td className="py-1.5 pr-3 font-mono">{f.pat !== null ? formatCr(Number(f.pat) / 1e7) : "—"}</td>
                     <td className="py-1.5 pr-3 font-mono">{f.eps !== null ? `₹${f.eps}` : "—"}</td>
                     <td className="py-1.5 pr-3 font-mono">{f.debtEquity !== null ? f.debtEquity.toString() : "—"}</td>
+                    <td className="py-1.5 pr-3 text-muted-foreground">{f.source}</td>
                   </tr>
                 ))}
               </tbody>
@@ -117,7 +123,7 @@ export default async function CompanyDetailPage({ params }: { params: Promise<{ 
         <Card className="p-4">
           <h2 className="text-sm font-semibold">Recent Announcements</h2>
           {company.announcements.length === 0 ? (
-            <p className="mt-2 text-xs text-muted-foreground">No data available yet.</p>
+            <p className="mt-2 text-xs text-muted-foreground">No data available yet</p>
           ) : (
             <div className="mt-2 flex flex-col gap-2">
               {company.announcements.map((a) => (
@@ -134,9 +140,9 @@ export default async function CompanyDetailPage({ params }: { params: Promise<{ 
         </Card>
 
         <Card className="p-4">
-          <h2 className="text-sm font-semibold">Recent News</h2>
+          <h2 className="text-sm font-semibold">Recent News (GDELT)</h2>
           {company.newsArticles.length === 0 ? (
-            <p className="mt-2 text-xs text-muted-foreground">No data available yet.</p>
+            <p className="mt-2 text-xs text-muted-foreground">No data available yet</p>
           ) : (
             <div className="mt-2 flex flex-col gap-2">
               {company.newsArticles.map((n) => (
@@ -153,9 +159,9 @@ export default async function CompanyDetailPage({ params }: { params: Promise<{ 
       </div>
 
       <Card className="p-4">
-        <h2 className="text-sm font-semibold">Price History (last {Math.min(company.priceHistory.length, 10)} trading days)</h2>
+        <h2 className="text-sm font-semibold">Price History (last {company.priceHistory.length} trading days)</h2>
         {company.priceHistory.length === 0 ? (
-          <p className="mt-2 text-xs text-muted-foreground">No data available yet.</p>
+          <p className="mt-2 text-xs text-muted-foreground">No data available yet</p>
         ) : (
           <div className="mt-2 overflow-x-auto">
             <table className="w-full text-xs">
@@ -167,7 +173,6 @@ export default async function CompanyDetailPage({ params }: { params: Promise<{ 
                   <th className="py-1.5 pr-3 font-medium">Low</th>
                   <th className="py-1.5 pr-3 font-medium">Close</th>
                   <th className="py-1.5 pr-3 font-medium">Volume</th>
-                  <th className="py-1.5 pr-3 font-medium">Source</th>
                 </tr>
               </thead>
               <tbody>
@@ -179,7 +184,6 @@ export default async function CompanyDetailPage({ params }: { params: Promise<{ 
                     <td className="py-1.5 pr-3 font-mono">{p.low !== null ? `₹${p.low.toString()}` : "—"}</td>
                     <td className="py-1.5 pr-3 font-mono">₹{p.close.toString()}</td>
                     <td className="py-1.5 pr-3 font-mono">{p.volume.toString()}</td>
-                    <td className="py-1.5 pr-3 text-muted-foreground uppercase">{p.source}</td>
                   </tr>
                 ))}
               </tbody>

@@ -39,3 +39,12 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# generated Prisma client — regenerate with `npx prisma generate`
+/src/generated/prisma
+
+# raw ingestion debug dumps — never commit external API responses
+/data/raw/
+
+# local Postgres backups (pg_dump output) — never commit database contents
+/backups/

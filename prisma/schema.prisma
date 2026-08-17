@@ -1,0 +1,233 @@
+// TradeX data layer — Phase 1: company universe + fundamentals ingestion.
+//
+// This file was reconstructed via `prisma db pull` against the live database
+// after uncommitted work was lost to a git clean/reset — see AGENTS.md history.
+// Structure verified to exactly match the surviving 5,099-row Company table.
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+/// Classification of what a listed "security" row actually is. The NSE/BSE
+/// security lists contain more than ordinary operating companies (ETFs,
+/// preference shares, permitted-to-trade mutual fund units, ...). Rather than
+/// silently dropping anything that isn't obviously a normal company, every
+/// row is classified and kept — see lib/data/security-classification.ts.
+enum SecurityType {
+  COMMON_EQUITY
+  ETF
+  PREFERENCE
+  OTHER
+}
+
+/// One underlying company/security, keyed by ISIN so the same company listed
+/// on both NSE and BSE resolves to a single row instead of two.
+model Company {
+  id           String       @id @default(cuid())
+  isin         String       @unique
+  companyName  String
+  nseSymbol    String?
+  bseCode      String?
+  bseSymbol    String?
+  sector       String?
+  industry     String?
+  securityType SecurityType @default(OTHER)
+  /// Free-text exchange status (e.g. "Active", "Suspended") — sources use
+  /// inconsistent vocabularies, so this is intentionally not an enum yet.
+  status       String?
+  marketCap    Decimal?     @db.Decimal(20, 2)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  financialStatements FinancialStatement[]
+  priceHistory        PriceHistory[]
+  announcements       Announcement[]
+  newsArticles        NewsArticle[]
+
+  @@index([nseSymbol])
+  @@index([bseCode])
+  @@index([companyName])
+}
+
+enum PeriodType {
+  QUARTERLY
+  ANNUAL
+}
+
+/// A single reported financial period for a company. History is preserved —
+/// each period is its own row, never overwritten with only the latest values.
+model FinancialStatement {
+  id        String  @id @default(cuid())
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  /// Canonical human-readable period key, e.g. "Q1 FY2027" or "FY2026".
+  /// This (not fiscalYear+fiscalQuarter alone) is what the uniqueness
+  /// constraint below is built on, since fiscalQuarter is NULL for annual
+  /// periods and NULL != NULL in SQL uniqueness checks.
+  period        String
+  periodType    PeriodType
+  fiscalYear    Int
+  fiscalQuarter Int?
+
+  revenue           Decimal? @db.Decimal(20, 2)
+  ebitda            Decimal? @db.Decimal(20, 2)
+  ebit              Decimal? @db.Decimal(20, 2)
+  pat               Decimal? @db.Decimal(20, 2)
+  eps               Decimal? @db.Decimal(12, 4)
+  totalAssets       Decimal? @db.Decimal(20, 2)
+  totalLiabilities  Decimal? @db.Decimal(20, 2)
+  totalDebt         Decimal? @db.Decimal(20, 2)
+  cash              Decimal? @db.Decimal(20, 2)
+  operatingCashFlow Decimal? @db.Decimal(20, 2)
+  investingCashFlow Decimal? @db.Decimal(20, 2)
+  financingCashFlow Decimal? @db.Decimal(20, 2)
+  roe               Decimal? @db.Decimal(10, 4)
+  roce              Decimal? @db.Decimal(10, 4)
+  pe                Decimal? @db.Decimal(10, 4)
+  pb                Decimal? @db.Decimal(10, 4)
+  debtEquity        Decimal? @db.Decimal(10, 4)
+
+  /// Where this record came from, e.g. "stoxim". Never mix sources on one
+  /// row without recording provenance.
+  source          String
+  /// Path under data/raw/ to the raw API response this row was normalized
+  /// from, for debugging. Not a foreign key — the file may not exist locally.
+  rawResponsePath String?
+
+  lastFetchedAt         DateTime  @default(now())
+  lastSuccessfulFetchAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([companyId, period])
+  @@index([companyId])
+}
+
+/// Daily OHLCV bar for a company. One row per (company, date, source) — the
+/// unique constraint is what makes re-running price ingestion idempotent.
+model PriceHistory {
+  id        String  @id @default(cuid())
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  date DateTime @db.Date
+  /// Nullable because BSE's publicly-accessible price source (unlike NSE's)
+  /// only reports a single daily price, not full OHLC — open/high/low stay
+  /// NULL for BSE-sourced rows rather than being backfilled from close.
+  open  Decimal? @db.Decimal(14, 4)
+  high  Decimal? @db.Decimal(14, 4)
+  low   Decimal? @db.Decimal(14, 4)
+  close Decimal  @db.Decimal(14, 4)
+  /// Split/dividend-adjusted close, when the source provides one. Not
+  /// derived/calculated here — that belongs in the Feature Engine.
+  adjustedClose Decimal? @db.Decimal(14, 4)
+  volume        BigInt
+  tradedValue   Decimal? @db.Decimal(20, 2)
+
+  source String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([companyId, date, source])
+  @@index([companyId])
+}
+
+/// A corporate disclosure (order win, board decision, results, dividend,
+/// etc.) as filed with the exchange. `announcementType` is deliberately a
+/// free-text string, not an enum — until the NSE/BSE announcements client is
+/// actually built and we've seen the source's real category values, an enum
+/// here would just be guessed categories.
+model Announcement {
+  id        String  @id @default(cuid())
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  title             String
+  description       String?  @db.Text
+  announcementType  String?
+  announcementDate  DateTime
+
+  source    String
+  sourceUrl String
+  /// The source's own identifier for this disclosure, when it exposes one
+  /// (e.g. an NSE announcement/attachment ID). Not yet relied on for
+  /// deduplication since we haven't confirmed every source provides one —
+  /// sourceUrl is the dedup key instead (see unique constraint below).
+  externalId String?
+  /// Pointer to the raw filing (e.g. a PDF/attachment URL) rather than the
+  /// full document body — see Phase 8 raw-storage convention.
+  rawReference String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([companyId, sourceUrl])
+  @@index([companyId])
+  @@index([announcementDate])
+}
+
+/// News article metadata (e.g. from GDELT) — never the full article body,
+/// just enough to link back to the source and judge relevance later.
+model NewsArticle {
+  id         String   @id @default(cuid())
+  companyId  String?
+  company    Company? @relation(fields: [companyId], references: [id], onDelete: SetNull)
+
+  title         String
+  url           String
+  sourceDomain  String?
+  publishedAt   DateTime?
+  language      String?
+  country       String?
+  sourceCountry String?
+  snippet       String?  @db.Text
+  relevanceScore Float?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([companyId, url])
+  @@index([companyId])
+  @@index([publishedAt])
+}
+
+/// Audit trail for every ingestion job run — required before any automated
+/// (scheduled) ingestion is safe to turn on. One row per run, not per record.
+model IngestionRun {
+  id String @id @default(cuid())
+
+  /// e.g. "NSE", "BSE", "STOXIM", "GDELT". Free-text: new sources shouldn't
+  /// require a migration to add.
+  source   String
+  /// e.g. "FINANCIAL_RESULTS", "PRICES", "ANNOUNCEMENTS", "NEWS".
+  dataType String
+
+  startedAt   DateTime  @default(now())
+  completedAt DateTime?
+  /// "RUNNING" | "SUCCESS" | "PARTIAL" | "FAILED"
+  status      String    @default("RUNNING")
+
+  recordsProcessed Int @default(0)
+  recordsInserted  Int @default(0)
+  recordsUpdated   Int @default(0)
+  recordsSkipped   Int @default(0)
+  recordsFailed    Int @default(0)
+
+  errorMessage String? @db.Text
+  /// Free-form extra context (e.g. { isin: "...", limit: 20 }) — deliberately
+  /// untyped rather than adding new columns for every source's quirks.
+  metadata     Json?
+
+  @@index([source, dataType])
+  @@index([startedAt])
+}

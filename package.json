@@ -6,16 +6,30 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test": "vitest run",
+    "db:migrate": "prisma migrate dev",
+    "db:studio": "prisma studio",
+    "ingest:nse": "tsx scripts/ingest-nse.ts",
+    "ingest:bse": "tsx scripts/ingest-bse.ts",
+    "ingest:fundamentals": "tsx scripts/ingest-fundamentals.ts",
+    "ingest:financials": "tsx scripts/ingest-financials.ts",
+    "ingest:prices": "tsx scripts/ingest-prices.ts",
+    "ingest:announcements": "tsx scripts/ingest-announcements.ts",
+    "ingest:news": "tsx scripts/ingest-news.ts",
+    "ingest:bse-prices": "tsx scripts/ingest-bse-prices.ts",
+    "ingest:bse-announcements": "tsx scripts/ingest-bse-announcements.ts"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",
+    "@prisma/client": "^6.19.3",
     "@tanstack/react-table": "^8.21.3",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",
     "lucide-react": "^1.31.0",
     "next": "16.3.0",
+    "prisma": "^6.19.3",
     "react": "19.2.8",
     "react-dom": "19.2.8",
     "recharts": "^3.10.1",
@@ -31,6 +45,8 @@
     "eslint": "^9",
     "eslint-config-next": "16.3.0",
     "tailwindcss": "^4",
-    "typescript": "^5"
+    "tsx": "^4.23.12",
+    "typescript": "^5",
+    "vitest": "^3.2.7"
   }
 }
