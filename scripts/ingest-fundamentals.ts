@@ -28,59 +28,45 @@ const RETRY_OPTIONS: RetryOptions = {
 async function upsertFinancialStatement(companyId: string, f: StoximFinancials, rawResponsePath: string) {
   const { period, periodType, fiscalYear, fiscalQuarter } = deriveFinancialPeriod(f.period);
 
-  await prisma.financialStatement.upsert({
-    where: { companyId_period: { companyId, period } },
-    create: {
-      companyId,
-      period,
-      periodType,
-      fiscalYear,
-      fiscalQuarter,
-      revenue: f.revenue,
-      ebitda: f.ebitda,
-      ebit: f.ebit,
-      pat: f.pat,
-      eps: f.eps,
-      totalAssets: f.totalAssets,
-      totalLiabilities: f.totalLiabilities,
-      totalDebt: f.totalDebt,
-      cash: f.cash,
-      operatingCashFlow: f.operatingCashFlow,
-      investingCashFlow: f.investingCashFlow,
-      financingCashFlow: f.financingCashFlow,
-      roe: f.roe,
-      roce: f.roce,
-      pe: f.pe,
-      pb: f.pb,
-      debtEquity: f.debtEquity,
-      source: "stoxim",
-      rawResponsePath,
-      lastSuccessfulFetchAt: new Date(),
-    },
-    update: {
-      revenue: f.revenue,
-      ebitda: f.ebitda,
-      ebit: f.ebit,
-      pat: f.pat,
-      eps: f.eps,
-      totalAssets: f.totalAssets,
-      totalLiabilities: f.totalLiabilities,
-      totalDebt: f.totalDebt,
-      cash: f.cash,
-      operatingCashFlow: f.operatingCashFlow,
-      investingCashFlow: f.investingCashFlow,
-      financingCashFlow: f.financingCashFlow,
-      roe: f.roe,
-      roce: f.roce,
-      pe: f.pe,
-      pb: f.pb,
-      debtEquity: f.debtEquity,
-      source: "stoxim",
-      rawResponsePath,
-      lastFetchedAt: new Date(),
-      lastSuccessfulFetchAt: new Date(),
-    },
+  const values = {
+    revenue: f.revenue,
+    ebitda: f.ebitda,
+    ebit: f.ebit,
+    pat: f.pat,
+    eps: f.eps,
+    totalAssets: f.totalAssets,
+    totalLiabilities: f.totalLiabilities,
+    totalDebt: f.totalDebt,
+    cash: f.cash,
+    operatingCashFlow: f.operatingCashFlow,
+    investingCashFlow: f.investingCashFlow,
+    financingCashFlow: f.financingCashFlow,
+    roe: f.roe,
+    roce: f.roce,
+    pe: f.pe,
+    pb: f.pb,
+    debtEquity: f.debtEquity,
+  };
+
+  // Stoxim doesn't distinguish standalone/consolidated, so statementType
+  // stays null for this source (see StatementType doc comment in schema) —
+  // Prisma's compound-unique upsert doesn't accept a null key component, so
+  // this uses findFirst + create/update instead.
+  const existing = await prisma.financialStatement.findFirst({
+    where: { companyId, period, statementType: null, source: "stoxim" },
+    select: { id: true },
   });
+
+  if (existing) {
+    await prisma.financialStatement.update({
+      where: { id: existing.id },
+      data: { ...values, rawResponsePath, lastFetchedAt: new Date(), lastSuccessfulFetchAt: new Date() },
+    });
+  } else {
+    await prisma.financialStatement.create({
+      data: { companyId, period, periodType, fiscalYear, fiscalQuarter, ...values, source: "stoxim", rawResponsePath, lastSuccessfulFetchAt: new Date() },
+    });
+  }
 }
 
 async function main() {

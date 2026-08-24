@@ -27,6 +27,14 @@ import { RateLimitedError } from "@/lib/data/rate-limiter";
  * below deliberately reuses this same verified historical endpoint (asking
  * for the most recent available day) rather than guessing at a separate
  * live-quote URL that hasn't been tested.
+ *
+ * VERIFIED PER-REQUEST CAP (2026-08-17): asking for a full 365-day range in
+ * one call silently returns only the most recent ~70 trading days — no
+ * error, no pagination field, just truncation. Requesting an older window
+ * directly (not touching "today") does return real data for that period, so
+ * this is a per-call response cap, not a hard depth limit. See
+ * getHistoricalPricesChunked() for how longer ranges are actually fetched
+ * (multiple real requests against this same endpoint, not a new one).
  */
 
 const NSE_BASE_URL = "https://www.nseindia.com";
@@ -86,7 +94,7 @@ export class NseMarketDataClient implements MarketDataProvider {
 
   async getHistoricalPrices(symbol: string, fromDate: Date, toDate: Date): Promise<{ rows: NseHistoricalPriceRow[]; raw: unknown }> {
     const url = `${NSE_BASE_URL}/api/historicalOR/generateSecurityWiseHistoricalData?from=${formatNseDate(fromDate)}&to=${formatNseDate(toDate)}&symbol=${encodeURIComponent(symbol)}&type=priceVolume&series=EQ`;
-    const response = await this.fetchImpl(url, { headers: browserHeaders() });
+    const response = await this.fetchImpl(url, { headers: browserHeaders(), signal: AbortSignal.timeout(30000) });
 
     if (response.status === 429) {
       const retryAfterHeader = response.headers.get("retry-after");
@@ -109,6 +117,45 @@ export class NseMarketDataClient implements MarketDataProvider {
     weekAgo.setUTCDate(weekAgo.getUTCDate() - 7);
     const { rows } = await this.getHistoricalPrices(symbol, weekAgo, today);
     return rows[0] ?? null;
+  }
+
+  /**
+   * Fetches a date range longer than NSE's per-request cap by splitting it
+   * into sequential chunks. CONFIRMED live (2026-08-17): requesting a full
+   * 365-day range for RELIANCE silently returned only the most recent ~70
+   * trading days (server-side truncation, not documented) — but requesting
+   * an older 90-calendar-day window on its own returned real data for that
+   * period, confirming NSE genuinely retains deeper history and this is a
+   * per-call cap, not a hard depth limit. `minIntervalMs` paces requests
+   * between chunks for the same reason the ingest scripts pace between
+   * companies — this method makes multiple real requests, not one.
+   */
+  async getHistoricalPricesChunked(symbol: string, fromDate: Date, toDate: Date, chunkDays = 80, minIntervalMs = 800): Promise<{ rows: NseHistoricalPriceRow[]; raw: unknown[] }> {
+    const allRows: NseHistoricalPriceRow[] = [];
+    const allRaw: unknown[] = [];
+    const seenDates = new Set<string>();
+
+    let chunkEnd = new Date(toDate);
+    while (chunkEnd > fromDate) {
+      const chunkStart = new Date(chunkEnd);
+      chunkStart.setUTCDate(chunkStart.getUTCDate() - chunkDays);
+      const effectiveStart = chunkStart < fromDate ? fromDate : chunkStart;
+
+      const { rows, raw } = await this.getHistoricalPrices(symbol, effectiveStart, chunkEnd);
+      allRaw.push(raw);
+      for (const row of rows) {
+        if (!seenDates.has(row.mTIMESTAMP)) {
+          seenDates.add(row.mTIMESTAMP);
+          allRows.push(row);
+        }
+      }
+
+      chunkEnd = new Date(effectiveStart);
+      chunkEnd.setUTCDate(chunkEnd.getUTCDate() - 1);
+      if (chunkEnd > fromDate) await new Promise((resolve) => setTimeout(resolve, minIntervalMs));
+    }
+
+    return { rows: allRows, raw: allRaw };
   }
 }
 

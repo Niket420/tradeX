@@ -2,11 +2,12 @@
  * Fetch daily OHLCV price history from NSE and store as PriceHistory rows.
  *
  * Usage:
- *   npm run ingest:prices -- --isin=INE002A01018 --days=30
- *   npm run ingest:prices -- --limit=20 --days=30
+ *   npm run ingest:prices -- --isin=INE002A01018 --days=365
+ *   npm run ingest:prices -- --limit=20 --days=365
  *
  * If neither --limit nor --isin is given, defaults to --limit=10.
- * --days defaults to 30 (start small for testing, per the ingestion plan).
+ * --days defaults to 365 (~1 year). Requests longer than ~70 trading days
+ * are automatically chunked — see getHistoricalPricesChunked doc comment.
  */
 import { prisma } from "@/lib/db/prisma";
 import { parseArgs } from "@/lib/data/cli-args";
@@ -16,7 +17,7 @@ import { runSequentially, RateLimitedError, type RetryOptions } from "@/lib/data
 import { startIngestionRun } from "@/lib/data/ingestion-run";
 
 const DEFAULT_LIMIT = 10;
-const DEFAULT_DAYS = 30;
+const DEFAULT_DAYS = 365;
 
 const RETRY_OPTIONS: RetryOptions = {
   minIntervalMs: 800,
@@ -36,24 +37,30 @@ async function ingestOneCompany(company: CompanyRef, days: number): Promise<{ st
   const fromDate = new Date(toDate);
   fromDate.setUTCDate(fromDate.getUTCDate() - days);
 
-  // Resume support: if we already have a price row within the last 3 days
-  // (allowing for a weekend/holiday gap), this company's window is already
-  // covered from a prior run — skip re-fetching so a long batch can be
-  // safely re-run after an interruption without re-hitting NSE for
-  // everything already done.
+  // Resume support: skip only if we already have BOTH a recent row (within
+  // the last 3 days, allowing for a weekend/holiday gap) AND a row reaching
+  // back close to the start of the requested window — i.e. the requested
+  // depth of history is actually covered, not just "some" recent data.
+  // Without the depth check, a company with only 30 days of history would
+  // wrongly skip a later --days=365 backfill just for having a recent row.
   const recentCutoff = new Date(toDate);
   recentCutoff.setUTCDate(recentCutoff.getUTCDate() - 3);
-  const existingRecent = await prisma.priceHistory.findFirst({
-    where: { companyId: company.id, source: "nse", date: { gte: recentCutoff } },
-    select: { id: true },
-  });
-  if (existingRecent) {
-    return { status: "skipped", reason: "already have recent price data" };
+  const oldestNeededCutoff = new Date(toDate);
+  oldestNeededCutoff.setUTCDate(oldestNeededCutoff.getUTCDate() - days + 5);
+  const [existingRecent, existingDeepEnough] = await Promise.all([
+    prisma.priceHistory.findFirst({ where: { companyId: company.id, source: "nse", date: { gte: recentCutoff } }, select: { id: true } }),
+    prisma.priceHistory.findFirst({ where: { companyId: company.id, source: "nse", date: { lte: oldestNeededCutoff } }, select: { id: true } }),
+  ]);
+  if (existingRecent && existingDeepEnough) {
+    return { status: "skipped", reason: "already have recent price data covering the requested window" };
   }
 
+  // NSE caps each request to ~70 trading days regardless of the requested
+  // range (verified, not documented — see nseMarketData.ts doc comment);
+  // anything longer needs multiple chunked requests.
   let result;
   try {
-    result = await client.getHistoricalPrices(company.nseSymbol, fromDate, toDate);
+    result = days > 80 ? await client.getHistoricalPricesChunked(company.nseSymbol, fromDate, toDate) : await client.getHistoricalPrices(company.nseSymbol, fromDate, toDate);
   } catch (error) {
     if (error instanceof RateLimitedError) throw error;
     const reason = error instanceof NseMarketDataError ? error.message : error instanceof Error ? error.message : String(error);

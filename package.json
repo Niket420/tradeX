@@ -18,7 +18,8 @@
     "ingest:announcements": "tsx scripts/ingest-announcements.ts",
     "ingest:news": "tsx scripts/ingest-news.ts",
     "ingest:bse-prices": "tsx scripts/ingest-bse-prices.ts",
-    "ingest:bse-announcements": "tsx scripts/ingest-bse-announcements.ts"
+    "ingest:bse-announcements": "tsx scripts/ingest-bse-announcements.ts",
+    "ingest:shareholding": "tsx scripts/ingest-shareholding.ts"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",

@@ -153,6 +153,40 @@ export default async function CompanyDetailPage({ params }: { params: Promise<{ 
       </div>
 
       <Card className="p-4">
+        <h2 className="text-sm font-semibold">Shareholding Pattern</h2>
+        {company.shareholdings.length === 0 ? (
+          <p className="mt-2 text-xs text-muted-foreground">No data available yet.</p>
+        ) : (
+          <div className="mt-2 overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="border-b border-border text-left text-muted-foreground">
+                  <th className="py-1.5 pr-3 font-medium">As Of</th>
+                  <th className="py-1.5 pr-3 font-medium">Promoter</th>
+                  <th className="py-1.5 pr-3 font-medium">Public</th>
+                  <th className="py-1.5 pr-3 font-medium">FII</th>
+                  <th className="py-1.5 pr-3 font-medium">DII</th>
+                  <th className="py-1.5 pr-3 font-medium">Mutual Funds</th>
+                </tr>
+              </thead>
+              <tbody>
+                {company.shareholdings.map((s) => (
+                  <tr key={s.id} className="border-b border-border/60">
+                    <td className="py-1.5 pr-3">{fmtDate(s.asOfDate)}</td>
+                    <td className="py-1.5 pr-3 font-mono">{s.promoterHolding !== null ? `${s.promoterHolding}%` : "—"}</td>
+                    <td className="py-1.5 pr-3 font-mono">{s.publicHolding !== null ? `${s.publicHolding}%` : "—"}</td>
+                    <td className="py-1.5 pr-3 font-mono">{s.fiiHolding !== null ? `${s.fiiHolding}%` : "—"}</td>
+                    <td className="py-1.5 pr-3 font-mono">{s.diiHolding !== null ? `${s.diiHolding}%` : "—"}</td>
+                    <td className="py-1.5 pr-3 font-mono">{s.mutualFundHolding !== null ? `${s.mutualFundHolding}%` : "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
+
+      <Card className="p-4">
         <h2 className="text-sm font-semibold">Price History (last {Math.min(company.priceHistory.length, 10)} trading days)</h2>
         {company.priceHistory.length === 0 ? (
           <p className="mt-2 text-xs text-muted-foreground">No data available yet.</p>

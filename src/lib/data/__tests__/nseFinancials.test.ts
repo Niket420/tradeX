@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseXbrlFinancialResult, deriveNsePeriod, pickLatestResultWithXbrl, type NseFinancialResultRow } from "@/lib/data/nse/nseFinancials";
+import { parseXbrlFinancialResult, deriveNsePeriod, pickLatestResultWithXbrl, pickHistoricalResultsWithXbrl, mapStatementType, type NseFinancialResultRow } from "@/lib/data/nse/nseFinancials";
 
 // Minimal fixture using the real tag names/namespace confirmed against live
 // NSE XBRL filings (RELIANCE Q3 FY2025, TCS Q3 FY2025) — see nseFinancials.ts
@@ -113,5 +113,61 @@ describe("pickLatestResultWithXbrl", () => {
   it("returns null when nothing has a usable xbrl link", () => {
     const rows = [row({ format: "Old", xbrl: "-" })];
     expect(pickLatestResultWithXbrl(rows)).toBeNull();
+  });
+});
+
+describe("mapStatementType", () => {
+  it("maps NSE's Consolidated value", () => {
+    expect(mapStatementType("Consolidated")).toBe("CONSOLIDATED");
+  });
+
+  it("maps NSE's Non-Consolidated value to STANDALONE", () => {
+    expect(mapStatementType("Non-Consolidated")).toBe("STANDALONE");
+  });
+
+  it("throws on an unrecognized value instead of guessing", () => {
+    expect(() => mapStatementType("Combined")).toThrow(/unrecognized nse consolidated value/i);
+  });
+});
+
+describe("pickHistoricalResultsWithXbrl", () => {
+  it("keeps both Standalone and Consolidated rows for the same period as separate entries", () => {
+    const rows = [row({ consolidated: "Non-Consolidated" }), row({ consolidated: "Consolidated" })];
+    const picked = pickHistoricalResultsWithXbrl(rows, 20);
+    expect(picked).toHaveLength(2);
+  });
+
+  it("dedupes a repeated (period, statementType) combination, keeping the most-recent (first) occurrence", () => {
+    const rows = [
+      row({ consolidated: "Non-Consolidated", broadCastDate: "20-Jan-2025 10:00:00", xbrl: "https://example.com/revised.xml" }),
+      row({ consolidated: "Non-Consolidated", broadCastDate: "16-Jan-2025 20:20:21", xbrl: "https://example.com/original.xml" }),
+    ];
+    const picked = pickHistoricalResultsWithXbrl(rows, 20);
+    expect(picked).toHaveLength(1);
+    expect(picked[0].xbrl).toBe("https://example.com/revised.xml");
+  });
+
+  it("excludes rows without a usable xbrl link", () => {
+    const rows = [row({ xbrl: "-" })];
+    expect(pickHistoricalResultsWithXbrl(rows, 20)).toHaveLength(0);
+  });
+
+  it("excludes Old-format rows (pre-2015 archive)", () => {
+    const rows = [row({ format: "Old" })];
+    expect(pickHistoricalResultsWithXbrl(rows, 20)).toHaveLength(0);
+  });
+
+  it("respects the maxPeriods cap", () => {
+    const rows = [
+      row({ relatingTo: "Third Quarter", financialYear: "01-Apr-2024 To 31-Mar-2025", consolidated: "Non-Consolidated" }),
+      row({ relatingTo: "Second Quarter", financialYear: "01-Apr-2024 To 31-Mar-2025", consolidated: "Non-Consolidated" }),
+      row({ relatingTo: "First Quarter", financialYear: "01-Apr-2024 To 31-Mar-2025", consolidated: "Non-Consolidated" }),
+    ];
+    expect(pickHistoricalResultsWithXbrl(rows, 2)).toHaveLength(2);
+  });
+
+  it("skips a row with an unrecognized consolidated value rather than crashing", () => {
+    const rows = [row({ consolidated: "Combined" }), row({ consolidated: "Consolidated" })];
+    expect(pickHistoricalResultsWithXbrl(rows, 20)).toHaveLength(1);
   });
 });

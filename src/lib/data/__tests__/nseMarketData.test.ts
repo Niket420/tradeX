@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { parseNseTimestamp, parseNsePriceRow, formatNseDate, type NseHistoricalPriceRow } from "@/lib/data/nse/nseMarketData";
+import { describe, expect, it, vi } from "vitest";
+import { parseNseTimestamp, parseNsePriceRow, formatNseDate, NseMarketDataClient, type NseHistoricalPriceRow } from "@/lib/data/nse/nseMarketData";
 
 describe("parseNseTimestamp", () => {
   it("parses NSE's DD-Mon-YYYY format", () => {
@@ -56,5 +56,44 @@ describe("parseNsePriceRow", () => {
 
   it("keeps tradedValue null (not 0) when the source omits it", () => {
     expect(parseNsePriceRow(row({ CH_TOT_TRADED_VAL: null })).tradedValue).toBeNull();
+  });
+});
+
+describe("getHistoricalPricesChunked", () => {
+  it("makes multiple requests to cover a range longer than one chunk, and merges results without duplicates", async () => {
+    const requestedRanges: string[] = [];
+    const fetchImpl = vi.fn(async (url: string | URL | Request) => {
+      const u = new URL(url.toString());
+      const from = u.searchParams.get("from")!;
+      const to = u.searchParams.get("to")!;
+      requestedRanges.push(`${from}..${to}`);
+      // Each chunk returns one distinct row named after its "to" date, plus
+      // a row that overlaps with the previous chunk's boundary to verify dedup.
+      return new Response(JSON.stringify({ data: [row({ mTIMESTAMP: `01-${to.slice(3)}` })] }), { status: 200 });
+    });
+
+    const client = new NseMarketDataClient({ fetchImpl: fetchImpl as unknown as typeof fetch });
+    const to = new Date(Date.UTC(2026, 7, 17));
+    const from = new Date(Date.UTC(2025, 7, 17)); // 365 days back
+    const { rows } = await client.getHistoricalPricesChunked("RELIANCE", from, to, 80, 0);
+
+    expect(fetchImpl.mock.calls.length).toBeGreaterThan(1);
+    expect(rows.length).toBe(fetchImpl.mock.calls.length);
+  });
+
+  it("stays within the requested range on the final (oldest) chunk", async () => {
+    const requestedFroms: string[] = [];
+    const fetchImpl = vi.fn(async (url: string | URL | Request) => {
+      const u = new URL(url.toString());
+      requestedFroms.push(u.searchParams.get("from")!);
+      return new Response(JSON.stringify({ data: [] }), { status: 200 });
+    });
+    const client = new NseMarketDataClient({ fetchImpl: fetchImpl as unknown as typeof fetch });
+    const to = new Date(Date.UTC(2026, 7, 17));
+    const from = new Date(Date.UTC(2026, 5, 1)); // ~77 days back — 2 chunks at chunkDays=50
+    await client.getHistoricalPricesChunked("RELIANCE", from, to, 50, 0);
+
+    const oldestRequested = requestedFroms[requestedFroms.length - 1];
+    expect(oldestRequested).toBe(formatNseDate(from));
   });
 });

@@ -68,7 +68,7 @@ export class BseMarketDataClient {
   async getHistoricalPrices(bseCode: string, flag: BseFlag = "3M"): Promise<{ points: BseGraphPoint[]; raw: unknown }> {
     const referer = `https://www.bseindia.com/stock-share-price/x/x/${bseCode}/`;
     const url = `${BSE_BASE_URL}/StockReachGraph/w?scripcode=${encodeURIComponent(bseCode)}&flag=${flag}&fromdate=&todate=&seriesid=`;
-    const response = await this.fetchImpl(url, { headers: browserHeaders(referer) });
+    const response = await this.fetchImpl(url, { headers: browserHeaders(referer), signal: AbortSignal.timeout(30000) });
 
     if (response.status === 429) {
       const retryAfterHeader = response.headers.get("retry-after");

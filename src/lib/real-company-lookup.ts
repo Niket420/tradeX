@@ -16,6 +16,7 @@ export async function getRealCompanyBySymbol(symbol: string) {
       priceHistory: { orderBy: { date: "desc" }, take: 400 },
       announcements: { orderBy: { announcementDate: "desc" }, take: 15 },
       newsArticles: { orderBy: { publishedAt: "desc" }, take: 15 },
+      shareholdings: { orderBy: { asOfDate: "desc" }, take: 20 },
     },
   });
 }

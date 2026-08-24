@@ -70,7 +70,7 @@ export class BseAnnouncementsClient {
   async fetchAnnouncements(bseCode: string, fromDateYYYYMMDD: string, toDateYYYYMMDD: string): Promise<{ rows: BseAnnouncementRow[]; raw: unknown }> {
     const referer = `https://www.bseindia.com/stock-share-price/x/x/${bseCode}/corp-announcements/`;
     const url = `${BSE_BASE_URL}/AnnSubCategoryGetData/w?pageno=1&strCat=-1&strPrevDate=${fromDateYYYYMMDD}&strScrip=${encodeURIComponent(bseCode)}&strSearch=P&strToDate=${toDateYYYYMMDD}&strType=C&subcategory=-1`;
-    const response = await this.fetchImpl(url, { headers: browserHeaders(referer) });
+    const response = await this.fetchImpl(url, { headers: browserHeaders(referer), signal: AbortSignal.timeout(30000) });
 
     if (response.status === 429) {
       const retryAfterHeader = response.headers.get("retry-after");

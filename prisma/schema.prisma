@@ -50,6 +50,7 @@ model Company {
   priceHistory        PriceHistory[]
   announcements       Announcement[]
   newsArticles        NewsArticle[]
+  shareholdings       Shareholding[]
 
   @@index([nseSymbol])
   @@index([bseCode])
@@ -61,6 +62,17 @@ enum PeriodType {
   ANNUAL
 }
 
+/// STANDALONE vs CONSOLIDATED — NSE/BSE report these as genuinely separate
+/// filings for the same period, not variants of one number. Nullable: the
+/// ~1,903 FinancialStatement rows ingested before this field existed were
+/// upserted from whichever of the two NSE listed first for that period, so
+/// their actual type is genuinely unknown rather than guessable — leaving
+/// them NULL is honest; every row ingested from here on always sets this.
+enum StatementType {
+  STANDALONE
+  CONSOLIDATED
+}
+
 /// A single reported financial period for a company. History is preserved —
 /// each period is its own row, never overwritten with only the latest values.
 model FinancialStatement {
@@ -69,13 +81,11 @@ model FinancialStatement {
   company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
 
   /// Canonical human-readable period key, e.g. "Q1 FY2027" or "FY2026".
-  /// This (not fiscalYear+fiscalQuarter alone) is what the uniqueness
-  /// constraint below is built on, since fiscalQuarter is NULL for annual
-  /// periods and NULL != NULL in SQL uniqueness checks.
   period        String
   periodType    PeriodType
   fiscalYear    Int
   fiscalQuarter Int?
+  statementType StatementType?
 
   revenue           Decimal? @db.Decimal(20, 2)
   ebitda            Decimal? @db.Decimal(20, 2)
@@ -108,7 +118,7 @@ model FinancialStatement {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  @@unique([companyId, period])
+  @@unique([companyId, period, statementType, source])
   @@index([companyId])
 }
 
@@ -199,6 +209,41 @@ model NewsArticle {
   @@unique([companyId, url])
   @@index([companyId])
   @@index([publishedAt])
+}
+
+/// One reported shareholding-pattern filing for a company. History is
+/// preserved — each reporting date is its own row, matching the FinancialStatement
+/// convention. Fields are the SEBI shareholding-pattern aggregate categories
+/// that map cleanly to a single real XBRL tag+contextRef (see nseShareholding.ts
+/// doc comment) — NOT every sub-category NSE reports (e.g. AIFs, insurance
+/// companies, pension funds are real but far more granular than this phase needs).
+model Shareholding {
+  id        String  @id @default(cuid())
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  /// The reporting period-end date as given by the source (e.g. quarter-end),
+  /// not a derived/assumed fiscal quarter label — shareholding filings don't
+  /// always land exactly on calendar-quarter boundaries.
+  asOfDate DateTime @db.Date
+
+  promoterHolding   Decimal? @db.Decimal(6, 3)
+  publicHolding     Decimal? @db.Decimal(6, 3)
+  fiiHolding        Decimal? @db.Decimal(6, 3)
+  diiHolding        Decimal? @db.Decimal(6, 3)
+  mutualFundHolding Decimal? @db.Decimal(6, 3)
+  /// Null when unconfirmed from source; 0 is a real "no shares pledged" fact
+  /// (the source gives a boolean flag we can trust for the zero case).
+  pledgedPercentage Decimal? @db.Decimal(6, 3)
+
+  source          String
+  rawResponsePath String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([companyId, asOfDate, source])
+  @@index([companyId])
 }
 
 /// Audit trail for every ingestion job run — required before any automated

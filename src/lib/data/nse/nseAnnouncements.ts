@@ -67,7 +67,7 @@ export class NseAnnouncementsClient {
 
   async fetchAnnouncements(symbol: string, fromDate: string, toDate: string): Promise<{ rows: NseAnnouncementRow[]; raw: unknown }> {
     const url = `${NSE_BASE_URL}/api/corporate-announcements?index=equities&symbol=${encodeURIComponent(symbol)}&from_date=${fromDate}&to_date=${toDate}`;
-    const response = await this.fetchImpl(url, { headers: browserHeaders() });
+    const response = await this.fetchImpl(url, { headers: browserHeaders(), signal: AbortSignal.timeout(30000) });
 
     if (response.status === 429) {
       const retryAfterHeader = response.headers.get("retry-after");

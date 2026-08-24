@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 import { Card } from "@/components/ui/card";
 import { prisma } from "@/lib/db/prisma";
 import { computeFinancialGrowth, computePriceReturns } from "@/lib/features";
+import { computeFreshness } from "@/lib/data-freshness";
 import { formatCr, formatPct } from "@/lib/format";
 
 function fmtDate(d: Date): string {
@@ -23,9 +24,10 @@ export default async function RealCompanyDataPage({ params }: { params: Promise<
     where: { isin: isinUpper },
     include: {
       financialStatements: { orderBy: [{ fiscalYear: "desc" }, { fiscalQuarter: "desc" }] },
-      priceHistory: { orderBy: { date: "desc" }, take: 30 },
+      priceHistory: { orderBy: { date: "desc" }, take: 400 },
       announcements: { orderBy: { announcementDate: "desc" }, take: 15 },
       newsArticles: { orderBy: { publishedAt: "desc" }, take: 15 },
+      shareholdings: { orderBy: { asOfDate: "desc" }, take: 20 },
     },
   });
 
@@ -36,6 +38,14 @@ export default async function RealCompanyDataPage({ params }: { params: Promise<
 
   const sources = new Set([...company.financialStatements.map((f) => f.source), ...company.priceHistory.map((p) => p.source), ...company.announcements.map((a) => a.source)]);
   const sourceLabel = sources.size > 0 ? [...sources].map((s) => s.toUpperCase()).sort().join(" + ") : "no data yet";
+
+  const financialsFreshness = computeFreshness(company.financialStatements);
+  const pricesFreshness = computeFreshness(company.priceHistory);
+  const announcementsFreshness = computeFreshness(company.announcements);
+  const newsFreshness = computeFreshness(company.newsArticles.map((n) => ({ ...n, source: "gdelt" })));
+  const shareholdingFreshness = computeFreshness(company.shareholdings);
+  const priceDaysSpan =
+    company.priceHistory.length > 0 ? Math.round((company.priceHistory[0].date.getTime() - company.priceHistory[company.priceHistory.length - 1].date.getTime()) / (1000 * 60 * 60 * 24)) : 0;
 
   return (
     <div className="flex flex-col gap-6">
@@ -48,6 +58,18 @@ export default async function RealCompanyDataPage({ params }: { params: Promise<
           {company.isin} {company.nseSymbol ? `· NSE: ${company.nseSymbol}` : ""} {company.bseCode ? `· BSE: ${company.bseCode}` : ""}
         </p>
       </div>
+
+      <Card className="p-4">
+        <h2 className="text-sm font-semibold">Data Status</h2>
+        <p className="text-xs text-muted-foreground">Whether our ingestion pipeline is actually working for this company — real timestamps from Postgres, not hardcoded.</p>
+        <div className="mt-2 grid grid-cols-2 gap-3 text-xs sm:grid-cols-5">
+          <FreshnessStat label="Financials" freshness={financialsFreshness} extra={`${financialsFreshness.periodsAvailable} period(s)`} />
+          <FreshnessStat label="Prices" freshness={pricesFreshness} extra={`${priceDaysSpan} day(s) history`} />
+          <FreshnessStat label="Announcements" freshness={announcementsFreshness} extra={`${announcementsFreshness.periodsAvailable} record(s)`} />
+          <FreshnessStat label="News" freshness={newsFreshness} extra={`${newsFreshness.periodsAvailable} article(s)`} />
+          <FreshnessStat label="Shareholding" freshness={shareholdingFreshness} extra={`${shareholdingFreshness.periodsAvailable} period(s)`} />
+        </div>
+      </Card>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <Card className="p-4">
@@ -159,6 +181,42 @@ export default async function RealCompanyDataPage({ params }: { params: Promise<
       </div>
 
       <Card className="p-4">
+        <h2 className="text-sm font-semibold">Shareholding Pattern</h2>
+        {company.shareholdings.length === 0 ? (
+          <p className="mt-2 text-xs text-muted-foreground">No data available yet</p>
+        ) : (
+          <div className="mt-2 overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="border-b border-border text-left text-muted-foreground">
+                  <th className="py-1.5 pr-3 font-medium">As Of</th>
+                  <th className="py-1.5 pr-3 font-medium">Promoter</th>
+                  <th className="py-1.5 pr-3 font-medium">Public</th>
+                  <th className="py-1.5 pr-3 font-medium">FII</th>
+                  <th className="py-1.5 pr-3 font-medium">DII</th>
+                  <th className="py-1.5 pr-3 font-medium">Mutual Funds</th>
+                  <th className="py-1.5 pr-3 font-medium">Pledged</th>
+                </tr>
+              </thead>
+              <tbody>
+                {company.shareholdings.map((s) => (
+                  <tr key={s.id} className="border-b border-border/60">
+                    <td className="py-1.5 pr-3">{fmtDate(s.asOfDate)}</td>
+                    <td className="py-1.5 pr-3 font-mono">{s.promoterHolding !== null ? `${s.promoterHolding}%` : "—"}</td>
+                    <td className="py-1.5 pr-3 font-mono">{s.publicHolding !== null ? `${s.publicHolding}%` : "—"}</td>
+                    <td className="py-1.5 pr-3 font-mono">{s.fiiHolding !== null ? `${s.fiiHolding}%` : "—"}</td>
+                    <td className="py-1.5 pr-3 font-mono">{s.diiHolding !== null ? `${s.diiHolding}%` : "—"}</td>
+                    <td className="py-1.5 pr-3 font-mono">{s.mutualFundHolding !== null ? `${s.mutualFundHolding}%` : "—"}</td>
+                    <td className="py-1.5 pr-3 font-mono">{s.pledgedPercentage !== null ? `${s.pledgedPercentage}%` : "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
+
+      <Card className="p-4">
         <h2 className="text-sm font-semibold">Price History (last {company.priceHistory.length} trading days)</h2>
         {company.priceHistory.length === 0 ? (
           <p className="mt-2 text-xs text-muted-foreground">No data available yet</p>
@@ -200,6 +258,23 @@ function Stat({ label, value }: { label: string; value: string }) {
     <div className="flex flex-col">
       <span className="text-muted-foreground">{label}</span>
       <span className="font-mono tabular-nums">{value}</span>
+    </div>
+  );
+}
+
+function FreshnessStat({ label, freshness, extra }: { label: string; freshness: { source: string | null; lastUpdated: Date | null }; extra: string }) {
+  return (
+    <div className="flex flex-col gap-0.5 rounded-md border border-border/60 p-2">
+      <span className="font-medium text-foreground">{label}</span>
+      {freshness.source ? (
+        <>
+          <span className="text-muted-foreground">{freshness.source}</span>
+          <span className="text-muted-foreground">{extra}</span>
+          <span className="text-muted-foreground">Updated {freshness.lastUpdated ? freshness.lastUpdated.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }) : "—"}</span>
+        </>
+      ) : (
+        <span className="text-muted-foreground">No data yet</span>
+      )}
     </div>
   );
 }

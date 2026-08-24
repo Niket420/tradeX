@@ -96,7 +96,7 @@ export class NseFinancialsClient {
   /** Fetches quarterly financial-result filings for one NSE symbol, most-recent first. */
   async fetchQuarterlyResults(symbol: string): Promise<{ rows: NseFinancialResultRow[]; raw: unknown }> {
     const url = `${NSE_BASE_URL}/api/corporates-financial-results?index=equities&period=Quarterly&symbol=${encodeURIComponent(symbol)}`;
-    const response = await this.fetchImpl(url, { headers: browserHeaders() });
+    const response = await this.fetchImpl(url, { headers: browserHeaders(), signal: AbortSignal.timeout(30000) });
 
     if (response.status === 429) {
       const retryAfterHeader = response.headers.get("retry-after");
@@ -115,7 +115,7 @@ export class NseFinancialsClient {
 
   /** Fetches the raw XBRL XML document for one filing (the `xbrl` field of a result row). */
   async fetchXbrl(url: string): Promise<string> {
-    const response = await this.fetchImpl(url, { headers: browserHeaders() });
+    const response = await this.fetchImpl(url, { headers: browserHeaders(), signal: AbortSignal.timeout(30000) });
     if (!response.ok) {
       throw new NseApiError(`Failed to fetch NSE XBRL document at ${url}: HTTP ${response.status}`, response.status);
     }
@@ -243,4 +243,42 @@ export function deriveNsePeriod(row: Pick<NseFinancialResultRow, "period" | "rel
 /** Picks the most recent row with a usable XBRL link from a results list (already most-recent-first). */
 export function pickLatestResultWithXbrl(rows: NseFinancialResultRow[]): NseFinancialResultRow | null {
   return rows.find((row) => row.xbrl && row.xbrl !== "-" && row.format === "New") ?? null;
+}
+
+/** Maps NSE's raw `consolidated` field ("Consolidated" | "Non-Consolidated") to the schema's StatementType. Throws on an unrecognized value rather than guessing. */
+export function mapStatementType(rawConsolidated: string): "STANDALONE" | "CONSOLIDATED" {
+  const normalized = rawConsolidated.trim().toLowerCase();
+  if (normalized === "consolidated") return "CONSOLIDATED";
+  if (normalized === "non-consolidated") return "STANDALONE";
+  throw new Error(`Unrecognized NSE consolidated value: "${rawConsolidated}"`);
+}
+
+/**
+ * Picks up to `maxPeriods` distinct (period, statementType) combinations
+ * with usable XBRL, most-recent first — for historical backfill, as opposed
+ * to pickLatestResultWithXbrl's single-row selection. NSE lists both a
+ * Standalone and Consolidated filing per period as separate rows; both are
+ * kept (see StatementType doc comment — they're genuinely different
+ * numbers, not variants to be merged). When the same (period, type) appears
+ * more than once (a revised/refiled result), the most recent broadCastDate
+ * wins since rows are already most-recent-first.
+ */
+export function pickHistoricalResultsWithXbrl(rows: NseFinancialResultRow[], maxPeriods = 20): NseFinancialResultRow[] {
+  const eligible = rows.filter((row) => row.xbrl && row.xbrl !== "-" && row.format === "New" && row.period === "Quarterly");
+  const seen = new Set<string>();
+  const picked: NseFinancialResultRow[] = [];
+  for (const row of eligible) {
+    let statementType: string;
+    try {
+      statementType = mapStatementType(row.consolidated);
+    } catch {
+      continue;
+    }
+    const key = `${row.relatingTo}|${row.financialYear}|${statementType}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    picked.push(row);
+    if (picked.length >= maxPeriods) break;
+  }
+  return picked;
 }

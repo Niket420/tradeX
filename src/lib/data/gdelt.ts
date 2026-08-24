@@ -74,7 +74,7 @@ export async function searchCompanyNews(companyName: string, options: SearchComp
   for (;;) {
     attempt++;
     try {
-      response = await fetchImpl(url, { headers: { Accept: "application/json" } });
+      response = await fetchImpl(url, { headers: { Accept: "application/json" }, signal: AbortSignal.timeout(30000) });
       break;
     } catch (error) {
       if (attempt >= maxNetworkAttempts) {
